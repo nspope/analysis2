@@ -1,0 +1,101 @@
+"""
+Snakefile for running sweeps benchmark on stdpopsim.
+"""
+
+import os
+import numpy as np
+import stdpopsim
+
+configfile: "workflows/config/snakemake/config_sweeps.yaml"
+
+np.random.seed(config["seed"])
+
+# ###############################################################################
+# GENERAL RULES & GLOBALS
+# ###############################################################################
+
+# The number of replicates of each analysis you would like to run
+replicates = config["replicates"]
+# Where you would like all output files from analysis to live
+output_dir = os.path.abspath(config["output_dir"])
+
+# The analysis species
+species = stdpopsim.get_species(config["species"])
+
+# The name of the chromosome to simulate
+chrom = config["chrm_list"]
+
+# The grid of coordinates at which to simulate sweeps, scaled by total
+# chromosome length
+sweep_coordinate_grid = np.linspace(0, 1, config["grid_size"])
+
+seed_array = np.random.random_integers(1,2**31,replicates)
+
+# The specific demographic model you would like to run
+demo_model_array =  config["demo_models"]
+demo_sample_size_dict = {}
+for x in demo_model_array:
+    demo_sample_size_dict[x["id"]] = x["num_samples_per_population"]
+demo_model_ids = [x["id"] for x in demo_model_array] 
+# Select DFE model from catalog  
+dfe_list = config["dfe_list"]
+annotation_list = config["annotation_list"]
+
+# ###############################################################################
+# GENERAL RULES & GLOBALS
+# ###############################################################################
+rule all:
+    input:
+        expand(output_dir + "/simulated_data/{demog}/{dfes}/{annots}/{seeds}/sim_{chrms}.trees", 
+            seeds=seed_array, 
+            demog=demo_model_ids,
+            dfes=dfe_list,
+            annots=annotation_list,
+            coord=sweep_coordinate_grid,
+            )
+
+rule simulation:
+    input:
+    output:
+        output_dir + "/simulated_data_sweeps/{time}/{strength}/{seeds}/sim_{grid}.trees"
+    resources: time=3000, mem_mb=10000
+    run:
+        model = species.get_demographic_model(config["demog"])
+        mutation_rate = model.mutation_rate
+
+        # Use new sample specification, give selected pop and sample size as config arguments
+        samples = {"YRI": ???, "CEU" : ???, "CHB" : ???}
+
+        genetic_map_id = config["genetic_map"]
+        contig = species.get_contig(wildcards.chrms, genetic_map=genetic_map_id)
+
+        #TODO: define dfe in config; might want to wildcard as neutral/nonneutral
+        dfe = species.get_dfe(config["dfe"])
+
+        #TODO: config contains annotation name; we're always using an annotation
+        ## Adding annotation only seletion on exon region
+        annot = species.get_annotations(wildcards.annots)
+        annot_intervals = annot.get_chromosome_annotations(wildcards.chrms)
+        contig.add_dfe(intervals=annot_intervals, DFE=dfe)
+
+        coord = ??? #get from the grid and the contig length
+        contig.add_single_site("sweep", coordinate=wildcards.coord)
+        extended_events = stdpopsim.ext.selective_sweep(
+            "sweep",
+            population=???, #selected pop
+            selection_coeff=???,
+            mutation_time_ago=???,
+        )
+        
+        contig.mutation_rate = mutation_rate
+        engine = stdpopsim.get_engine("slim")
+        ts = engine.simulate(
+            model,
+            contig,
+            samples,
+            extended_events=extend_events,
+            slim_scaling_factor=config["slim_scaling_factor"],
+            slim_burn_in=config["slim_burn_in"],
+            seed=wildcards.seeds,
+        )
+        ts.dump(output[0])
